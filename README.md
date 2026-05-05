@@ -120,6 +120,24 @@ The wizard will detect if rclone is missing or if no Google Drive remote is conf
 
 ---
 
+---
+
+## The Story Behind This
+
+The idea started with a frustration with the official Google Drive desktop client. It has a fundamental design flaw for a specific use case: if you mark files for offline access, it stores two copies — one on your main drive, one in Google's cache on C:. Delete the C: copy, and it just redownloads it. But if you keep files online-only, you can't access them from your main PC at all. As a sync tool for someone with files spread across machines, it simply didn't work the way it needed to.
+
+The original vision was: **PC as the main base, laptop as a satellite**. The laptop would pull files from the cloud on demand and cache them locally — but the cloud was just a backup, not the source of truth. The PC held everything.
+
+Building toward that, the laptop side turned out to be genuinely complex — rclone mounting via WinFsp, pinned folders for selective offline access, cache management. As that work progressed, the realization hit: the official Google Drive client's online-only mode already does exactly what the laptop side was trying to be. So the laptop implementation was scrapped, the PC sync side was polished and tested, and that's what DriveBridge is today.
+
+---
+
+## Credits
+
+The idea, requirements, and direction came from me. The code was written collaboratively with [Claude](https://claude.ai) and [Gemini](https://gemini.google.com) as AI coding assistants across multiple sessions.
+
+---
+
 ## License
 
 MIT — see [LICENSE](LICENSE)
