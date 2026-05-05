@@ -1,0 +1,125 @@
+# ☁️ DriveBridge
+
+**A lightweight Google Drive sync client for Windows — lives in your system tray, stays out of your way.**
+
+DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dropbox-style tray app. Two-way sync, live file watching, conflict resolution, and mass-deletion protection — without any of the bloat of the official client.
+
+> **Windows only.** Requires Python 3.10+ and rclone.
+
+---
+
+## Features
+
+- **Two-way bisync** — keeps a local folder and a Google Drive folder in sync, both ways
+- **Live watchdog** — detects file changes instantly and syncs within seconds, with debouncing so it doesn't hammer your CPU while you're actively typing
+- **Conflict resolution** — when the same file is edited on both sides simultaneously, DriveBridge stops, shows you both versions, and lets you pick
+- **Mass deletion protection** — if a sync would delete a large number of files on Drive, it pauses and asks for confirmation before touching anything
+- **Boot-sweep recovery** — runs a full reconciliation on every launch to catch changes made while the app was offline
+- **Smart exclusions** — ignores Windows/Office lock files (`~$*`, `Thumbs.db`, `.tmp`, `desktop.ini`) that would otherwise cause endless sync loops
+- **Single-instance enforcement** — native Windows mutex prevents duplicate background processes
+- **Native toast notifications** — sync complete / error alerts via Windows notification center, no extra packages
+- **Catppuccin dark theme** — easy on the eyes
+
+---
+
+## Requirements
+
+- **Python 3.10+** — [python.org](https://www.python.org/downloads/)
+- **rclone** — [rclone.org/downloads](https://rclone.org/downloads/)
+
+---
+
+## Installation
+
+**1. Clone the repo**
+```cmd
+git clone https://github.com/your-username/DriveBridge.git
+cd DriveBridge
+```
+
+**2. Install Python dependencies**
+```cmd
+pip install -r requirements.txt
+```
+
+**3. Install rclone**
+
+Download from [rclone.org/downloads](https://rclone.org/downloads/) and install it. The setup wizard will help you locate the executable on first launch.
+
+**4. Launch DriveBridge**
+```cmd
+Launch DriveBridge.bat
+```
+
+On first launch, the setup wizard will walk you through authenticating with Google Drive and choosing your sync folder. It handles everything — no manual rclone config needed.
+
+---
+
+## Usage
+
+Double-click `Launch DriveBridge.bat` — DriveBridge runs silently in the system tray.
+
+| Tray action | What it does |
+|---|---|
+| Single click | Open the activity feed (status, live progress, recent files) |
+| Double click | Open Settings |
+| Right click → Sync Now | Trigger an immediate sync |
+| Right click → Pause | Pause all sync activity |
+| Right click → Quit | Exit cleanly, terminating all rclone processes |
+
+### Sync modes
+
+Configure in **Settings → Sync Behavior**:
+
+| Mode | Description |
+|---|---|
+| **Interval** | Syncs every N minutes (default: 30) |
+| **Watchdog** | Syncs within seconds of any file change |
+| **Both** | Watchdog for instant sync + interval as a safety net |
+
+---
+
+## Project Structure
+
+```
+DriveBridge/
+├── main.py                     # App entry point — tray icon, background loops, mutex
+├── Launch DriveBridge.bat      # Launcher — finds pythonw/python from PATH automatically
+├── requirements.txt
+│
+├── core/                       # Engine — no UI imports
+│   ├── config.py               # Reads/writes drivebridge_config.json
+│   ├── logger.py               # In-memory ring buffer + rotating log file (512 KB cap)
+│   ├── rclone_manager.py       # All rclone subprocess orchestration
+│   └── startup.py              # Windows Startup folder registration
+│
+├── ui/                         # All GUI windows (customtkinter)
+│   ├── theme.py                # Shared colours
+│   ├── activity_feed.py        # Tray popup — live progress + recent file history
+│   ├── settings_gui.py         # Settings panel
+│   ├── conflict_ui.py          # Conflict resolver dialog
+│   ├── wizard.py               # First-run setup wizard
+│   └── gui_utils.py            # Window icon helper
+│
+└── utils/
+    └── notify_utils.py         # Native Windows toast notifications
+```
+
+---
+
+## Fresh Machine Setup
+
+If you're setting this up on a new PC from scratch:
+
+1. Install Python 3.10+ and add it to PATH
+2. Install rclone
+3. Clone this repo and run `pip install -r requirements.txt`
+4. Run `Launch DriveBridge.bat` — the wizard handles the rest
+
+The wizard will detect if rclone is missing or if no Google Drive remote is configured, and guide you through fixing it step by step.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE)

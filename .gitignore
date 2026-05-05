@@ -1,0 +1,23 @@
+# User config & logs (contain local paths and runtime data)
+drivebridge_config.json
+drivebridge.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
