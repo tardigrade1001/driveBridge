@@ -1,8 +1,8 @@
 # ☁️ DriveBridge
 
-**A lightweight Google Drive sync client for Windows — lives in your system tray, stays out of your way.**
+**A lightweight Google Drive sync client for Windows. Lives in your system tray, stays out of your way.**
 
-DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dropbox-style tray app. Two-way sync, live file watching, conflict resolution, and mass-deletion protection — without any of the bloat of the official client.
+DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dropbox-style tray app. Two-way sync, live file watching, conflict resolution, and mass-deletion protection, without the bloat of the official client.
 
 > **Windows only.** Requires Python 3.10+ and rclone.
 
@@ -10,22 +10,22 @@ DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dr
 
 ## Features
 
-- **Two-way bisync** — keeps a local folder and a Google Drive folder in sync, both ways
-- **Live watchdog** — detects file changes instantly and syncs within seconds, with debouncing so it doesn't hammer your CPU while you're actively typing
-- **Conflict resolution** — when the same file is edited on both sides simultaneously, DriveBridge stops, shows you both versions, and lets you pick
-- **Mass deletion protection** — if a sync would delete a large number of files on Drive, it pauses and asks for confirmation before touching anything
-- **Boot-sweep recovery** — runs a full reconciliation on every launch to catch changes made while the app was offline
-- **Smart exclusions** — ignores Windows/Office lock files (`~$*`, `Thumbs.db`, `.tmp`, `desktop.ini`) that would otherwise cause endless sync loops
-- **Single-instance enforcement** — native Windows mutex prevents duplicate background processes
-- **Native toast notifications** — sync complete / error alerts via Windows notification center, no extra packages
-- **Catppuccin dark theme** — easy on the eyes
+- **Two-way bisync**: keeps a local folder and a Google Drive folder in sync, both ways
+- **Live watchdog**: detects file changes instantly and syncs within seconds, with debouncing so it does not hammer your CPU while you are actively typing
+- **Conflict resolution**: when the same file is edited on both sides simultaneously, DriveBridge stops, shows you both versions, and lets you pick
+- **Mass deletion protection**: if a sync would delete a large number of files on Drive, it pauses and asks for confirmation before touching anything
+- **Boot-sweep recovery**: runs a full reconciliation on every launch to catch changes made while the app was offline
+- **Smart exclusions**: ignores Windows and Office lock files (`~$*`, `Thumbs.db`, `.tmp`, `desktop.ini`) that would otherwise cause endless sync loops
+- **Single-instance enforcement**: native Windows mutex prevents duplicate background processes
+- **Native toast notifications**: sync complete and error alerts via the Windows notification center, no extra packages required
+- **Catppuccin dark theme**
 
 ---
 
 ## Requirements
 
-- **Python 3.10+** — [python.org](https://www.python.org/downloads/)
-- **rclone** — [rclone.org/downloads](https://rclone.org/downloads/)
+- **Python 3.10+**: [python.org](https://www.python.org/downloads/)
+- **rclone**: [rclone.org/downloads](https://rclone.org/downloads/)
 
 ---
 
@@ -51,31 +51,31 @@ Download from [rclone.org/downloads](https://rclone.org/downloads/) and install 
 Launch DriveBridge.bat
 ```
 
-On first launch, the setup wizard will walk you through authenticating with Google Drive and choosing your sync folder. It handles everything — no manual rclone config needed.
+On first launch, the setup wizard will walk you through authenticating with Google Drive and choosing your sync folder. No manual rclone configuration is needed.
 
 ---
 
 ## Usage
 
-Double-click `Launch DriveBridge.bat` — DriveBridge runs silently in the system tray.
+Double-click `Launch DriveBridge.bat` to start. DriveBridge runs silently in the system tray.
 
 | Tray action | What it does |
 |---|---|
 | Single click | Open the activity feed (status, live progress, recent files) |
 | Double click | Open Settings |
-| Right click → Sync Now | Trigger an immediate sync |
-| Right click → Pause | Pause all sync activity |
-| Right click → Quit | Exit cleanly, terminating all rclone processes |
+| Right click > Sync Now | Trigger an immediate sync |
+| Right click > Pause | Pause all sync activity |
+| Right click > Quit | Exit cleanly, terminating all rclone processes |
 
 ### Sync modes
 
-Configure in **Settings → Sync Behavior**:
+Configure in **Settings > Sync Behavior**:
 
 | Mode | Description |
 |---|---|
 | **Interval** | Syncs every N minutes (default: 30) |
 | **Watchdog** | Syncs within seconds of any file change |
-| **Both** | Watchdog for instant sync + interval as a safety net |
+| **Both** | Watchdog for instant sync, with interval as a safety net |
 
 ---
 
@@ -83,11 +83,11 @@ Configure in **Settings → Sync Behavior**:
 
 ```
 DriveBridge/
-├── main.py                     # App entry point — tray icon, background loops, mutex
-├── Launch DriveBridge.bat      # Launcher — finds pythonw/python from PATH automatically
+├── main.py                     # App entry point: tray icon, background loops, mutex
+├── Launch DriveBridge.bat      # Launcher: finds pythonw/python from PATH automatically
 ├── requirements.txt
 │
-├── core/                       # Engine — no UI imports
+├── core/                       # Engine, no UI imports
 │   ├── config.py               # Reads/writes drivebridge_config.json
 │   ├── logger.py               # In-memory ring buffer + rotating log file (512 KB cap)
 │   ├── rclone_manager.py       # All rclone subprocess orchestration
@@ -95,7 +95,7 @@ DriveBridge/
 │
 ├── ui/                         # All GUI windows (customtkinter)
 │   ├── theme.py                # Shared colours
-│   ├── activity_feed.py        # Tray popup — live progress + recent file history
+│   ├── activity_feed.py        # Tray popup: live progress + recent file history
 │   ├── settings_gui.py         # Settings panel
 │   ├── conflict_ui.py          # Conflict resolver dialog
 │   ├── wizard.py               # First-run setup wizard
@@ -109,26 +109,22 @@ DriveBridge/
 
 ## Fresh Machine Setup
 
-If you're setting this up on a new PC from scratch:
-
 1. Install Python 3.10+ and add it to PATH
 2. Install rclone
 3. Clone this repo and run `pip install -r requirements.txt`
-4. Run `Launch DriveBridge.bat` — the wizard handles the rest
+4. Run `Launch DriveBridge.bat` and follow the setup wizard
 
-The wizard will detect if rclone is missing or if no Google Drive remote is configured, and guide you through fixing it step by step.
-
----
+The wizard will detect if rclone is missing or if no Google Drive remote is configured, and guide you through each step.
 
 ---
 
 ## The Story Behind This
 
-The idea started with a frustration with the official Google Drive desktop client. It has a fundamental design flaw for a specific use case: if you mark files for offline access, it stores two copies — one on your main drive, one in Google's cache on C:. Delete the C: copy, and it just redownloads it. But if you keep files online-only, you can't access them from your main PC at all. As a sync tool for someone with files spread across machines, it simply didn't work the way it needed to.
+The idea started with a frustration with the official Google Drive desktop client. Marking files for offline access stores two copies: one on your main drive, one in Google's cache on C:. Delete the C: copy and it redownloads. Keep files online-only and they are inaccessible from the main PC. For someone who needed reliable sync across machines, neither option was workable.
 
-The original vision was: **PC as the main base, laptop as a satellite**. The laptop would pull files from the cloud on demand and cache them locally — but the cloud was just a backup, not the source of truth. The PC held everything.
+The original plan was to build around a clear hierarchy: the PC as the main base holding everything, the laptop as a satellite that pulls files from the cloud on request. The cloud would serve as a backup layer, not the source of truth.
 
-Building toward that, the laptop side turned out to be genuinely complex — rclone mounting via WinFsp, pinned folders for selective offline access, cache management. As that work progressed, the realization hit: the official Google Drive client's online-only mode already does exactly what the laptop side was trying to be. So the laptop implementation was scrapped, the PC sync side was polished and tested, and that's what DriveBridge is today.
+The laptop side proved to be genuinely complex to implement. It required rclone mounting via WinFsp, pinned folders for selective offline access, and cache management. Partway through, it became clear that the official Google Drive client's online-only mode already covers that use case well enough. The laptop implementation was dropped, the PC sync side was completed and tested, and that is what DriveBridge is today.
 
 ---
 
