@@ -3,7 +3,6 @@ DriveBridge startup registration for Windows.
 Adds/removes a shortcut in the Windows Startup folder.
 """
 import os
-import sys
 from pathlib import Path
 
 
@@ -19,18 +18,17 @@ def is_registered():
     return _shortcut_path().exists()
 
 
-def _pythonw() -> str:
-    """Return pythonw.exe path (no console window) derived from the current interpreter."""
-    exe = Path(sys.executable)
-    candidate = exe.parent / "pythonw.exe"
-    return str(candidate) if candidate.exists() else str(exe)
-
-
 def register():
     """Add DriveBridge to Windows startup."""
-    python  = _pythonw()
     script  = Path(__file__).parent.parent / "main.py"
-    bat     = f'@echo off\nstart "" "{python}" "{script}"\n'
+    bat     = (
+        f'@echo off\n'
+        f'where pythonw >nul 2>&1 && (\n'
+        f'    start "" pythonw "{script}"\n'
+        f') || (\n'
+        f'    start "" python "{script}"\n'
+        f')\n'
+    )
     try:
         _shortcut_path().write_text(bat, encoding="utf-8")
         return True
