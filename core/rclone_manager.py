@@ -157,13 +157,21 @@ class RcloneManager:
                         # Scrape file history
                         if ": Copied" in line_clean or ": Deleted" in line_clean or ": Updated" in line_clean:
                             try:
-                                msg = line_clean.split("INFO  : ")[1] if "INFO  : " in line_clean else line_clean
-                                fname = msg.split(": ")[0].strip()
+                                # Strip timestamp + log level prefix if present (e.g. "2026/05/05 12:00:00 INFO  : ")
+                                if "INFO  : " in line_clean:
+                                    msg = line_clean.split("INFO  : ", 1)[1]
+                                elif "NOTICE: " in line_clean:
+                                    msg = line_clean.split("NOTICE: ", 1)[1]
+                                else:
+                                    msg = line_clean
+                                # fname is everything before the last ": Action" segment
+                                fname = re.split(r": (?:Copied|Deleted|Updated)", msg)[0].strip()
+                                if not fname:
+                                    raise ValueError("empty fname")
 
                                 action = "Deleted" if "Deleted" in line_clean else "Synced"
 
                                 new_entry = {"name": fname, "action": action, "time": time.strftime("%H:%M")}
-                                # Prevent perfect duplicate spam back-to-back (thread-safe)
                                 with self._recent_lock:
                                     if not self.recent_files or self.recent_files[0]["name"] != fname:
                                         self.recent_files = ([new_entry] + self.recent_files)[:10]
@@ -202,6 +210,7 @@ class RcloneManager:
                     self.last_synced  = datetime.datetime.now()
                     self._retry_count = 0
                     self.status       = prev_status
+                    self.live_progress = ""
                     logger.success(f"Synced {local_path.name}")
 
                     # Automatically Scan for Conflicts
@@ -220,6 +229,7 @@ class RcloneManager:
                         on_complete(True, None)
 
                 else:
+                    self.live_progress = ""
                     fatal_lines = [l for l in out_err_list if "ERROR" in l or "NOTICE" in l or "Failed" in l]
                     detail = fatal_lines[-1].split("NOTICE:")[-1].strip() if fatal_lines else ""
 
