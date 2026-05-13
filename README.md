@@ -12,7 +12,9 @@ DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dr
 
 - **Two-way bisync**: keeps a local folder and a Google Drive folder in sync, both ways
 - **Live watchdog**: detects file changes instantly and syncs within seconds, with debouncing so it does not hammer your CPU while you are actively typing
-- **Conflict resolution**: when the same file is edited on both sides simultaneously, DriveBridge stops, shows you both versions, and lets you pick
+- **Ultra-fast Scanning**: optimized with parallel checkers and checksum-skipping to reduce sync overhead from minutes to seconds
+- **Automatic Conflict Resolution**: uses "newer wins" logic to resolve simultaneous edits instantly, preventing "conflict file" clutter while preserving your latest save
+- **Cross-Platform Stability**: handles Google Drive's 1-second timestamp rounding to prevent "false" change detections and unnecessary syncs
 - **Mass deletion protection**: if a sync would delete a large number of files on Drive, it pauses and asks for confirmation before touching anything
 - **Boot-sweep recovery**: runs a full reconciliation on every launch to catch changes made while the app was offline
 - **Smart exclusions**: ignores Windows and Office lock files (`~$*`, `Thumbs.db`, `.tmp`, `desktop.ini`) that would otherwise cause endless sync loops
