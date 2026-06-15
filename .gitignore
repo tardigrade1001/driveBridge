@@ -1,6 +1,7 @@
 # User config & logs (contain local paths and runtime data)
 drivebridge_config.json
 drivebridge.log
+drivebridge.log*
 
 # Python
 __pycache__/
