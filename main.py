@@ -25,6 +25,7 @@ class DriveBridgeApp:
         self.rclone        = RcloneManager(self.root)
         self.icon          = None
         self._elapsed_mins = 0
+        self._stopping     = False
 
     # ─────────────────────────────────────────────────────────
     #  Icon
@@ -138,6 +139,7 @@ class DriveBridgeApp:
 
     def _on_quit(self, icon, item):
         logger.info("DriveBridge shutting down.")
+        self._stopping = True
         self.rclone.stop_sync()
         self.rclone.stop_watch()
         icon.stop()
@@ -164,11 +166,18 @@ class DriveBridgeApp:
     #  Background loops
     # ─────────────────────────────────────────────────────────
     def _status_loop(self):
+        # Only touch the tray icon when the status actually changes. Reassigning
+        # icon.icon every tick churns GDI HICON handles and can race with / crash
+        # pystray's message-loop thread over long uptimes.
+        last = None
         while True:
             try:
                 if self.icon:
-                    self.icon.icon  = self._make_icon(self._icon_color())
-                    self.icon.title = self._status_text()
+                    key = (self._icon_color(), self._status_text())
+                    if key != last:
+                        self.icon.icon  = self._make_icon(key[0])
+                        self.icon.title = key[1]
+                        last = key
             except Exception:
                 pass
             time.sleep(2)
@@ -199,18 +208,11 @@ class DriveBridgeApp:
                     self.rclone.start_watch()
 
     # ─────────────────────────────────────────────────────────
-    #  Run
+    #  Tray icon construction + supervision
     # ─────────────────────────────────────────────────────────
-    def run(self):
-        # First run wizard
-        if not run_if_needed():
-            return
-
-        cfg = config.load_config()
-        logger.info("DriveBridge started.")
-
-        self._apply_sync_mode()
-
+    def _build_icon(self):
+        """Build a fresh pystray Icon (+ menu). Used at startup and to rebuild
+        the icon if its message-loop thread ever dies."""
         menu = pystray.Menu(
             pystray.MenuItem(self._status_text, None, enabled=False),
             pystray.Menu.SEPARATOR,
@@ -225,23 +227,63 @@ class DriveBridgeApp:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit",       self._on_quit),
         )
-
-        self.icon = pystray.Icon(
+        icon = pystray.Icon(
             "drivebridge",
             self._make_icon(self._icon_color()),
             "DriveBridge",
             menu
         )
+        # pystray limits single clicks on Windows; default=True menu item handles double-click reliably
+        icon.on_activate = self._on_single_click
+        return icon
 
-        # pystray limits single clicks on Windows; setting default=True to menu handles double-click reliably
-        self.icon.on_activate = self._on_single_click
+    def _run_icon_supervised(self):
+        """Keep the tray icon alive for the life of the process.
+
+        pystray re-adds the icon on explorer restarts (it handles
+        WM_TASKBARCREATED) — but only while its message loop is running. If that
+        loop thread dies (e.g. a GDI hiccup over long uptime), the icon vanishes
+        while the rest of the app keeps running. Here we block on icon.run(), and
+        if it ever returns/crashes without us quitting, we rebuild and restart it.
+        """
+        while not self._stopping:
+            try:
+                self.icon.visible = True
+                self.icon.run()          # blocks until icon.stop() or a crash
+            except Exception as e:
+                logger.error(f"Tray icon crashed: {e!r}")
+            if self._stopping:
+                break
+            logger.warning("Tray icon stopped unexpectedly — rebuilding in 3s")
+            time.sleep(3)
+            try:
+                self.icon = self._build_icon()
+            except Exception as e:
+                logger.error(f"Failed to rebuild tray icon: {e!r}")
+                time.sleep(5)
+
+    # ─────────────────────────────────────────────────────────
+    #  Run
+    # ─────────────────────────────────────────────────────────
+    def run(self):
+        # First run wizard
+        if not run_if_needed():
+            return
+
+        cfg = config.load_config()
+        logger.info("DriveBridge started.")
+
+        self._apply_sync_mode()
+
+        self.icon = self._build_icon()
 
         threading.Thread(target=self._status_loop,         daemon=True).start()
         threading.Thread(target=self._interval_sync_loop,  daemon=True).start()
         threading.Thread(target=self._watchdog_guard_loop, daemon=True).start()
 
-        # Run pystray system tray icon in a dedicated daemon thread
-        threading.Thread(target=self.icon.run, daemon=True).start()
+        # Run the tray icon under a supervisor so it survives explorer restarts
+        # and icon-thread crashes (see _run_icon_supervised).
+        threading.Thread(target=self._run_icon_supervised, daemon=True).start()
 
         # Trigger an initial sweep to catch files edited while the app was offline
         if not self.rclone.is_paused:
