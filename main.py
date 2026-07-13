@@ -80,6 +80,12 @@ class DriveBridgeApp:
     def _status_text(self, item=None):
         cfg  = config.load_config()
         mode = cfg.get("sync_mode", "interval")
+        if self.rclone.quick_upload_active:
+            name = self.rclone.quick_upload_file.replace("\\", "/").rsplit("/", 1)[-1]
+            return f"DriveBridge · uploading {name}"
+        queued = self.rclone.pending_upload_count()
+        if queued:
+            return f"DriveBridge · {queued} quick upload{'s' if queued != 1 else ''} queued"
         extra = ""
         if self.rclone.is_paused:
             extra = " [paused]"
@@ -281,13 +287,16 @@ class DriveBridgeApp:
         threading.Thread(target=self._interval_sync_loop,  daemon=True).start()
         threading.Thread(target=self._watchdog_guard_loop, daemon=True).start()
 
-        # Run the tray icon under a supervisor so it survives explorer restarts
-        # and icon-thread crashes (see _run_icon_supervised).
-        threading.Thread(target=self._run_icon_supervised, daemon=True).start()
+        # pystray's run() must be called from the main thread. Tkinter also
+        # requires that thread, so use pystray's supported integration mode;
+        # it prepares the icon and runs its Windows message loop separately.
+        self.icon.run_detached()
 
-        # Trigger an initial sweep to catch files edited while the app was offline
+        # Let immediate local changes use the quick-upload path first. Once the
+        # folder has been quiet briefly, reconcile edits made while we were off.
         if not self.rclone.is_paused:
-            threading.Thread(target=self._on_sync_now, daemon=True).start()
+            threading.Thread(target=self.rclone.startup_reconcile_when_idle,
+                             daemon=True).start()
 
         # Tkinter requires the exact Main Thread to stay stable long-term
         self.root.mainloop()

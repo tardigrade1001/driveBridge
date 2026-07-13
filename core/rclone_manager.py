@@ -5,6 +5,7 @@ Includes optional watchdog-based live sync and error recovery.
 """
 import datetime
 import glob
+import json
 import os
 import re
 import subprocess
@@ -14,6 +15,8 @@ from pathlib import Path
 
 from core import config
 from core import logger
+
+HISTORY_FILE = Path(__file__).parent.parent / "drivebridge_activity.json"
 
 try:
     from watchdog.observers import Observer
@@ -25,34 +28,56 @@ except ImportError:
 
 class _SyncHandler(FileSystemEventHandler):
     """Debounces rapid file changes before triggering sync."""
-    def __init__(self, trigger_fn, debounce_seconds=4):
+    def __init__(self, upload_fn, reconcile_fn, debounce_seconds=4):
         super().__init__()
-        self._trigger  = trigger_fn
+        self._upload = upload_fn
+        self._reconcile = reconcile_fn
         self._debounce = debounce_seconds
-        self._timer    = None
+        self._timers = {}
+        self._reconcile_timer = None
         self._lock     = threading.Lock()
 
     def _should_ignore(self, event):
-        path = getattr(event, 'dest_path', event.src_path)
+        path = getattr(event, 'dest_path', None) or event.src_path
         name = os.path.basename(path).lower()
         if name.startswith("~$") or name.endswith(".tmp") or name in ("desktop.ini", "thumbs.db", ".bisync_initialized"):
             return True
         return False
 
-    def _schedule(self, event=None):
+    def _schedule_upload(self, event):
         if event and self._should_ignore(event):
             return
+        if event.is_directory:
+            return
+        path = getattr(event, 'dest_path', None) or event.src_path
         with self._lock:
-            if self._timer:
-                self._timer.cancel()
-            self._timer = threading.Timer(self._debounce, self._trigger)
-            self._timer.daemon = True
-            self._timer.start()
+            old_timer = self._timers.pop(path, None)
+            if old_timer:
+                old_timer.cancel()
+            timer = threading.Timer(self._debounce, self._fire_upload, args=(path,))
+            timer.daemon = True
+            self._timers[path] = timer
+            timer.start()
 
-    def on_created(self, event):  self._schedule(event)
-    def on_modified(self, event): self._schedule(event)
-    def on_deleted(self, event):  self._schedule(event)
-    def on_moved(self, event):    self._schedule(event)
+    def _fire_upload(self, path):
+        with self._lock:
+            self._timers.pop(path, None)
+        self._upload(path)
+
+    def _schedule_reconcile(self):
+        with self._lock:
+            if self._reconcile_timer:
+                self._reconcile_timer.cancel()
+            self._reconcile_timer = threading.Timer(self._debounce, self._reconcile)
+            self._reconcile_timer.daemon = True
+            self._reconcile_timer.start()
+
+    def on_created(self, event):  self._schedule_upload(event)
+    def on_modified(self, event): self._schedule_upload(event)
+    def on_deleted(self, event):  self._schedule_reconcile()
+    def on_moved(self, event):
+        self._schedule_upload(event)
+        self._schedule_reconcile()
 
 
 class RcloneManager:
@@ -67,9 +92,17 @@ class RcloneManager:
         self._retry_count      = 0
         self._max_retries      = 3
         self.live_progress     = ""
-        self.recent_files      = []
+        self.recent_files      = self._load_recent()
         self._sync_process     = None
         self.is_paused         = False
+        self._pending_sync     = False
+        self._pending_uploads  = set()
+        self._pending_lock     = threading.Lock()
+        self._upload_lock      = threading.Lock()
+        self._last_local_change = time.monotonic()
+        self.quick_upload_active = False
+        self.quick_upload_file = ""
+        self.last_quick_synced = None
 
 
     def toggle_pause(self):
@@ -177,10 +210,7 @@ class RcloneManager:
 
                                 action = "Deleted" if "Deleted" in line_clean else "Synced"
 
-                                new_entry = {"name": fname, "action": action, "time": time.strftime("%H:%M")}
-                                with self._recent_lock:
-                                    if not self.recent_files or self.recent_files[0]["name"] != fname:
-                                        self.recent_files = ([new_entry] + self.recent_files)[:10]
+                                self._record_recent(fname, action)
                             except Exception:
                                 pass
 
@@ -280,6 +310,7 @@ class RcloneManager:
                         self._sync_lock.release()
                     except RuntimeError:
                         pass  # just in case
+                    self._drain_pending_work()
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -298,6 +329,127 @@ class RcloneManager:
         local  = Path(cfg["local_folder"])
         remote = f"{cfg['remote_name']}:{cfg['drive_folder']}"
         self._run_bisync(local, remote, on_complete=on_complete)
+
+    def request_reconcile(self):
+        """Run one full sync, preserving the request if other work is active."""
+        if self._sync_lock.locked():
+            self._pending_sync = True
+            logger.info("Full reconciliation queued after active sync.")
+        else:
+            self.full_bisync()
+
+    def fast_upload(self, path):
+        """Queue one changed local file without scanning the entire tree."""
+        self._last_local_change = time.monotonic()
+        cfg = config.load_config()
+        local_root = Path(cfg["local_folder"])
+        source = Path(path)
+        try:
+            source.relative_to(local_root)
+        except ValueError:
+            return
+        if self.is_paused or not source.is_file():
+            return
+        with self._pending_lock:
+            self._pending_uploads.add(str(source))
+        self._drain_pending_work()
+
+    def startup_reconcile_when_idle(self, quiet_seconds=15):
+        """Give newly created files priority before the slow startup sweep."""
+        while not self.is_paused:
+            remaining = quiet_seconds - (time.monotonic() - self._last_local_change)
+            if remaining <= 0:
+                break
+            time.sleep(min(1, remaining))
+        if not self.is_paused:
+            logger.info("Local activity quiet; starting startup reconciliation.")
+            self.request_reconcile()
+
+    def _drain_pending_work(self):
+        if self.is_paused:
+            return
+        with self._pending_lock:
+            uploads = list(self._pending_uploads)
+            self._pending_uploads.clear()
+        if uploads:
+            if not self._upload_lock.acquire(blocking=False):
+                with self._pending_lock:
+                    self._pending_uploads.update(uploads)
+                return
+            threading.Thread(target=self._run_fast_uploads,
+                             args=(uploads,), daemon=True).start()
+        elif self._pending_sync and not self._sync_lock.locked():
+            self._pending_sync = False
+            self.full_bisync()
+
+    def _run_fast_uploads(self, paths):
+        try:
+            self.quick_upload_active = True
+            cfg = config.load_config()
+            local_root = Path(cfg["local_folder"])
+            remote_root = f"{cfg['remote_name']}:{cfg['drive_folder']}"
+            cflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+            for raw_path in paths:
+                source = Path(raw_path)
+                if self.is_paused or not source.is_file():
+                    continue
+                relative = source.relative_to(local_root).as_posix()
+                self.quick_upload_file = relative
+                size = source.stat().st_size
+                started = time.monotonic()
+                logger.info(f"Quick uploading {relative}")
+                result = subprocess.run(
+                    [cfg["rclone_path"], "copyto", str(source),
+                     f"{remote_root}/{relative}", "--modify-window", "1s",
+                     "--no-traverse"],
+                    capture_output=True, text=True, creationflags=cflags)
+                if result.returncode == 0:
+                    logger.success(f"Quick synced {relative}")
+                    self.last_quick_synced = datetime.datetime.now()
+                    self._record_recent(relative, "Synced", size=size,
+                                        duration=time.monotonic() - started)
+                else:
+                    detail = result.stderr.strip()
+                    self.last_error = f"Quick upload failed for {relative}: {detail}"
+                    logger.error(self.last_error)
+                    self._pending_sync = True
+        finally:
+            self.quick_upload_active = False
+            self.quick_upload_file = ""
+            self._upload_lock.release()
+            self._drain_pending_work()
+
+    def _record_recent(self, name, action, size=None, duration=None):
+        entry = {
+            "name": name,
+            "action": action,
+            "time": time.strftime("%H:%M"),
+            "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+            "size": size,
+            "duration": round(duration, 1) if duration is not None else None,
+        }
+        with self._recent_lock:
+            self.recent_files = [e for e in self.recent_files if e["name"] != name]
+            self.recent_files = ([entry] + self.recent_files)[:10]
+            snapshot = list(self.recent_files)
+        try:
+            temp = HISTORY_FILE.with_suffix(".tmp")
+            temp.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+            os.replace(temp, HISTORY_FILE)
+        except Exception as exc:
+            logger.warning(f"Could not save activity history: {exc}")
+
+    @staticmethod
+    def _load_recent():
+        try:
+            data = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+            return data[:10] if isinstance(data, list) else []
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return []
+
+    def pending_upload_count(self):
+        with self._pending_lock:
+            return len(self._pending_uploads)
 
     # ─────────────────────────────────────────────────────────
     #  WATCHDOG
@@ -320,7 +472,9 @@ class RcloneManager:
             logger.error(f"Watchdog: folder not found: {local}")
             return False
 
-        handler  = _SyncHandler(trigger_fn=self.full_bisync, debounce_seconds=4)
+        handler = _SyncHandler(upload_fn=self.fast_upload,
+                               reconcile_fn=self.request_reconcile,
+                               debounce_seconds=4)
         observer = Observer()
         observer.schedule(handler, str(local), recursive=True)
         observer.daemon = True

@@ -2,6 +2,7 @@
 drivebridge_config.json
 drivebridge.log
 drivebridge.log*
+drivebridge_activity.json
 
 # Python
 __pycache__/

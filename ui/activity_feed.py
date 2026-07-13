@@ -1,18 +1,26 @@
-"""
-DriveBridge activity feed window.
-Opens on single tray click — shows recent sync events.
-"""
+"""Compact status dashboard opened from the DriveBridge tray icon."""
+import datetime
+import os
 import tkinter as tk
+from pathlib import PurePosixPath
+
 import customtkinter as ctk
-from core import logger
-from core import startup
-from ui.theme import ACCENT, LEVEL_COLORS
+
+from core import config, logger, startup
+from ui.theme import ACCENT
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
-BG      = "#1e1e2e"
-SURFACE = "#2a2a3e"
+BG = "#11111b"
+CARD = "#1e1e2e"
+CARD_ALT = "#181825"
+TEXT = "#cdd6f4"
+MUTED = "#8f96ad"
+GREEN = "#a6e3a1"
+BLUE = "#89b4fa"
+YELLOW = "#f9e2af"
+RED = "#f38ba8"
 
 
 class ActivityFeed:
@@ -21,213 +29,280 @@ class ActivityFeed:
 
     @classmethod
     def open(cls, parent_root, rclone_manager):
-        """Open or bring to front — runs on central UI thread."""
         if cls._is_open:
             try:
-                if cls._instance and cls._instance.root.winfo_exists():
-                    cls._instance.root.lift()
-                    return
+                cls._instance.root.lift()
+                cls._instance.root.focus_force()
+                return
             except Exception:
-                pass
-            cls._is_open = False  # Reset if destroyed
+                cls._is_open = False
 
-        def _create():
+        def create():
             cls._is_open = True
             cls._instance = cls(parent_root, rclone_manager)
-            def on_close():
-                ActivityFeed._is_open = False
-                try: cls._instance.root.destroy()
-                except Exception: pass
-            cls._instance.root.protocol("WM_DELETE_WINDOW", on_close)
 
-        # Safely inject into the master Tk loop
-        parent_root.after(0, _create)
+        parent_root.after(0, create)
 
     def __init__(self, parent_root, rclone_manager):
-        self.rclone = rclone_manager
         self.parent = parent_root
+        self.rclone = rclone_manager
+        self._last_history = None
+        self._pulse = 0
 
         self.root = ctk.CTkToplevel(parent_root)
-        self.root.title("DriveBridge Activity")
-
-        # Calculate screen geometry to pin it to the bottom right above the taskbar
-        w, h = 360, 320
-        ws = self.root.winfo_screenwidth()
-        hs = self.root.winfo_screenheight()
-        x = ws - w - 20  # 20px padding from right
-        y = hs - h - 60  # 60px padding from bottom (rough taskbar size)
-
+        self.root.title("DriveBridge")
+        w, h = 440, 620
+        x = self.root.winfo_screenwidth() - w - 20
+        y = self.root.winfo_screenheight() - h - 60
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         self.root.resizable(False, False)
-
-        # Make it behave like a Dropbox popup
-        self.root.overrideredirect(True)      # Strips the Windows title bar and close buttons
-        self.root.attributes("-topmost", True) # Keep it visibly hovering
-        self.root.focus_force()               # Force focus so click-away works
-
-        # Destroy the panel instantly if the user clicks anywhere else on their screen
-        def on_focus_out(event):
-            # Only trigger if the focus actually left our application completely
-            if not str(self.root.focus_get()).startswith(str(self.root)):
-                try:
-                    ActivityFeed._is_open = False
-                    self.root.destroy()
-                except Exception: pass
-
-        self.root.bind("<FocusOut>", on_focus_out)
+        self.root.configure(fg_color=BG)
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
 
         from ui import gui_utils
         gui_utils.apply_window_icon(self.root)
-
         self._build()
         self._refresh()
         self._schedule_refresh()
 
+    def _close(self):
+        ActivityFeed._is_open = False
+        ActivityFeed._instance = None
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
     def _build(self):
-        # Header row
-        header = ctk.CTkFrame(self.root, fg_color=SURFACE, corner_radius=0, height=48)
-        header.pack(fill="x")
-        header.pack_propagate(False)
+        header = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
+        header.pack(fill="x", padx=18, pady=(16, 10))
+        ctk.CTkLabel(header, text="DriveBridge",
+                     font=ctk.CTkFont("Segoe UI", 21, "bold"),
+                     text_color=TEXT).pack(side="left")
+        ctk.CTkButton(header, text="×", width=30, height=30,
+                      fg_color="transparent", hover_color="#313244",
+                      font=ctk.CTkFont("Segoe UI", 20), command=self._close).pack(side="right")
 
-        self._status_dot = ctk.CTkLabel(header, text="●", text_color="#888888",
-                                         font=ctk.CTkFont("Segoe UI", size=16, weight="bold"))
-        self._status_dot.pack(side="left", padx=(12,4), pady=12)
+        hero = ctk.CTkFrame(self.root, fg_color=CARD, corner_radius=14)
+        hero.pack(fill="x", padx=16, pady=(0, 10))
+        self._hero_dot = ctk.CTkLabel(hero, text="●", width=24,
+                                      font=ctk.CTkFont(size=20))
+        self._hero_dot.grid(row=0, column=0, rowspan=2, padx=(16, 6), pady=15)
+        self._hero_title = ctk.CTkLabel(hero, text="Checking…", anchor="w",
+                                        font=ctk.CTkFont("Segoe UI", 16, "bold"), text_color=TEXT)
+        self._hero_title.grid(row=0, column=1, sticky="sw", pady=(12, 0))
+        self._hero_subtitle = ctk.CTkLabel(hero, text="", anchor="w",
+                                           font=ctk.CTkFont("Segoe UI", 11), text_color=MUTED)
+        self._hero_subtitle.grid(row=1, column=1, sticky="nw", pady=(0, 12))
+        hero.columnconfigure(1, weight=1)
 
-        self._status_label = ctk.CTkLabel(header, text="idle",
-                                           font=ctk.CTkFont("Segoe UI", size=14, weight="bold"))
-        self._status_label.pack(side="left", pady=12)
+        lanes = ctk.CTkFrame(self.root, fg_color="transparent")
+        lanes.pack(fill="x", padx=16, pady=(0, 10))
+        lanes.columnconfigure((0, 1), weight=1, uniform="lane")
+        quick = ctk.CTkFrame(lanes, fg_color=CARD_ALT, corner_radius=12)
+        quick.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        ctk.CTkLabel(quick, text="QUICK UPLOADS", text_color=MUTED,
+                     font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(anchor="w", padx=13, pady=(11, 2))
+        self._quick_value = ctk.CTkLabel(quick, text="Ready", text_color=GREEN,
+                                         font=ctk.CTkFont("Segoe UI", 14, "bold"), anchor="w")
+        self._quick_value.pack(anchor="w", padx=13)
+        self._quick_detail = ctk.CTkLabel(quick, text="Watching files", text_color=MUTED,
+                                          font=ctk.CTkFont("Segoe UI", 10), anchor="w")
+        self._quick_detail.pack(anchor="w", padx=13, pady=(1, 11))
 
-        self._pause_btn = ctk.CTkButton(header, text="Pause", width=65, height=28,
-                      fg_color="#313244", hover_color="#45475a",
-                      font=ctk.CTkFont("Segoe UI", size=13),
-                      command=self._toggle_pause)
-        self._pause_btn.pack(side="right", padx=(4, 8), pady=10)
+        full = ctk.CTkFrame(lanes, fg_color=CARD_ALT, corner_radius=12)
+        full.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
+        ctk.CTkLabel(full, text="BACKGROUND CHECK", text_color=MUTED,
+                     font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(anchor="w", padx=13, pady=(11, 2))
+        self._full_value = ctk.CTkLabel(full, text="Idle", text_color=GREEN,
+                                        font=ctk.CTkFont("Segoe UI", 14, "bold"), anchor="w")
+        self._full_value.pack(anchor="w", padx=13)
+        self._full_detail = ctk.CTkLabel(full, text="Safety reconciliation", text_color=MUTED,
+                                         font=ctk.CTkFont("Segoe UI", 10), anchor="w")
+        self._full_detail.pack(anchor="w", padx=13, pady=(1, 11))
 
-        ctk.CTkButton(header, text="Sync Now", width=85, height=28,
+        section = ctk.CTkFrame(self.root, fg_color="transparent")
+        section.pack(fill="x", padx=18, pady=(2, 5))
+        ctk.CTkLabel(section, text="Recent files", text_color=TEXT,
+                     font=ctk.CTkFont("Segoe UI", 14, "bold")).pack(side="left")
+        self._last_sync_label = ctk.CTkLabel(section, text="", text_color=MUTED,
+                                              font=ctk.CTkFont("Segoe UI", 10))
+        self._last_sync_label.pack(side="right")
+
+        self._feed = ctk.CTkScrollableFrame(self.root, fg_color=CARD_ALT,
+                                             corner_radius=12, height=220)
+        self._feed.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+
+        actions = ctk.CTkFrame(self.root, fg_color="transparent")
+        actions.pack(fill="x", padx=16, pady=(0, 8))
+        for col in range(3):
+            actions.columnconfigure(col, weight=1)
+        self._pause_btn = ctk.CTkButton(actions, text="Pause", height=34,
+                                         fg_color="#313244", hover_color="#45475a",
+                                         command=self._toggle_pause)
+        self._pause_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        ctk.CTkButton(actions, text="Full check", height=34,
                       fg_color=ACCENT, hover_color="#9580ff",
-                      font=ctk.CTkFont("Segoe UI", size=13, weight="bold"),
-                      command=self._sync_now
-                      ).pack(side="right", padx=(8, 4), pady=10)
+                      command=self._sync_now).grid(row=0, column=1, sticky="ew", padx=4)
+        ctk.CTkButton(actions, text="Open folder", height=34,
+                      fg_color="#313244", hover_color="#45475a",
+                      command=self._open_folder).grid(row=0, column=2, sticky="ew", padx=(4, 0))
 
-        self.header_frame = header # saved for positional inserting
-
-        # Progress tracking (Hidden by default)
-        self._progress_frame = ctk.CTkFrame(self.root, fg_color="transparent")
-        self._progress_label = ctk.CTkLabel(self._progress_frame, text="",
-                                            text_color="#cdd6f4", font=ctk.CTkFont("Segoe UI", size=12), anchor="w", justify="left", wraplength=330)
-        self._progress_label.pack(side="left", fill="x", expand=True)
-
-        # Activity list
-        ctk.CTkLabel(self.root, text="Recent activity",
-                     font=ctk.CTkFont("Segoe UI", size=14, weight="bold"), text_color="#a6adc8"
-                     ).pack(anchor="w", padx=12, pady=(10, 2))
-
-        self._feed_scroll = ctk.CTkScrollableFrame(self.root, fg_color="#181825", orientation="horizontal")
-        self._feed_scroll.pack(fill="both", expand=True, padx=8, pady=4)
-
-        self._feed_label = ctk.CTkLabel(self._feed_scroll, text="", justify="left", font=ctk.CTkFont("Consolas", size=11), text_color="#cdd6f4", anchor="nw")
-        self._feed_label.pack(fill="both", expand=True, padx=4, pady=4)
-
-        # Footer
-        footer = ctk.CTkFrame(self.root, fg_color=SURFACE, corner_radius=0, height=40)
-        footer.pack(fill="x", side="bottom")
-        footer.pack_propagate(False)
-
+        footer = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
+        footer.pack(fill="x", padx=18, pady=(0, 12))
         self._startup_var = tk.BooleanVar(value=startup.is_registered())
-        ctk.CTkCheckBox(footer, text="Start with Windows",
-                        variable=self._startup_var,
-                        fg_color=ACCENT, hover_color="#9580ff",
-                        font=ctk.CTkFont("Segoe UI", size=12),
-                        command=self._toggle_startup
-                        ).pack(side="left", padx=10, pady=8)
+        ctk.CTkCheckBox(footer, text="Start with Windows", variable=self._startup_var,
+                        checkbox_width=18, checkbox_height=18, fg_color=ACCENT,
+                        font=ctk.CTkFont("Segoe UI", 11),
+                        command=self._toggle_startup).pack(side="left")
+        ctk.CTkButton(footer, text="Settings", width=72, height=28,
+                      fg_color="transparent", border_width=1, border_color="#45475a",
+                      hover_color="#313244", command=self._open_settings).pack(side="right")
+        ctk.CTkButton(footer, text="Log", width=48, height=28,
+                      fg_color="transparent", hover_color="#313244",
+                      command=self._open_log).pack(side="right", padx=4)
 
-        ctk.CTkButton(footer, text="Settings", width=70, height=26,
-                      fg_color="#45475a", hover_color="#585b70",
-                      font=ctk.CTkFont("Segoe UI", size=12),
-                      command=self._open_settings
-                      ).pack(side="right", padx=(4, 8), pady=7)
+    def _refresh(self):
+        paused = self.rclone.is_paused
+        quick = getattr(self.rclone, "quick_upload_active", False)
+        full = self.rclone.status == "syncing"
+        pending = self.rclone.pending_upload_count()
 
-        ctk.CTkButton(footer, text="View Full Log", width=100, height=26,
-                      fg_color="#45475a", hover_color="#585b70",
-                      font=ctk.CTkFont("Segoe UI", size=12),
-                      command=self._open_log
-                      ).pack(side="right", padx=(8, 4), pady=7)
+        if paused:
+            title, subtitle, color = "Sync paused", "No files will be transferred", RED
+        elif self.rclone.last_error and self.rclone.status == "error":
+            title, subtitle, color = "Needs attention", self.rclone.last_error, RED
+        elif quick:
+            title, subtitle, color = "Uploading now", self.rclone.quick_upload_file, BLUE
+        elif pending:
+            title, subtitle, color = "Files queued", f"{pending} waiting for quick upload", YELLOW
+        else:
+            title = "Watching for changes"
+            subtitle = "New and modified files upload automatically"
+            color = GREEN
+        self._hero_dot.configure(text_color=color)
+        self._hero_title.configure(text=title)
+        self._hero_subtitle.configure(text=subtitle)
+        self._pause_btn.configure(text="Resume" if paused else "Pause",
+                                  fg_color=RED if paused else "#313244")
+
+        if quick:
+            dots = "." * (self._pulse % 4)
+            self._quick_value.configure(text=f"Uploading{dots}", text_color=BLUE)
+            self._quick_detail.configure(text=self._short(self.rclone.quick_upload_file, 27))
+        elif pending:
+            self._quick_value.configure(text=f"{pending} queued", text_color=YELLOW)
+            self._quick_detail.configure(text="Waiting to upload")
+        else:
+            self._quick_value.configure(text="Ready", text_color=GREEN)
+            self._quick_detail.configure(text="~4 sec after save")
+
+        self._full_value.configure(text="Running" if full else "Idle",
+                                   text_color=BLUE if full else GREEN)
+        detail = self.rclone.live_progress if full and self.rclone.live_progress else "Safety reconciliation"
+        self._full_detail.configure(text=self._short(detail, 27))
+
+        entries = list(getattr(self.rclone, "recent_files", []))
+        last = self.rclone.last_quick_synced or self.rclone.last_synced
+        if not last and entries and entries[0].get("timestamp"):
+            try:
+                last = datetime.datetime.fromisoformat(entries[0]["timestamp"])
+            except (TypeError, ValueError):
+                pass
+        self._last_sync_label.configure(text=self._relative_time(last))
+        history = repr(entries)
+        if history != self._last_history:
+            self._last_history = history
+            self._render_feed(entries)
+
+    def _render_feed(self, entries):
+        for widget in self._feed.winfo_children():
+            widget.destroy()
+        if not entries:
+            ctk.CTkLabel(self._feed, text="No file activity in this session",
+                         text_color=MUTED, font=ctk.CTkFont(size=11)).pack(pady=38)
+            return
+        for entry in entries[:7]:
+            row = ctk.CTkFrame(self._feed, fg_color="transparent", height=42)
+            row.pack(fill="x", pady=2)
+            row.pack_propagate(False)
+            symbol = "✓" if entry["action"] != "Deleted" else "−"
+            ctk.CTkLabel(row, text=symbol, width=24, text_color=GREEN if symbol == "✓" else RED,
+                         font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
+            path = PurePosixPath(str(entry["name"]).replace("\\", "/"))
+            text_box = ctk.CTkFrame(row, fg_color="transparent")
+            text_box.pack(side="left", fill="both", expand=True)
+            ctk.CTkLabel(text_box, text=self._short(path.name, 39), anchor="w",
+                         text_color=TEXT, font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(fill="x")
+            parent = "" if str(path.parent) == "." else str(path.parent)
+            meta = " · ".join(x for x in (self._format_size(entry.get("size")),
+                                             self._format_duration(entry.get("duration")),
+                                             self._short(parent, 30)) if x)
+            ctk.CTkLabel(text_box, text=meta or entry.get("action", "Synced"), anchor="w",
+                         text_color=MUTED, font=ctk.CTkFont("Segoe UI", 9)).pack(fill="x")
+            ctk.CTkLabel(row, text=entry["time"], width=42, text_color=MUTED,
+                         font=ctk.CTkFont("Segoe UI", 10)).pack(side="right")
+
+    @staticmethod
+    def _short(text, length):
+        text = str(text or "")
+        return text if len(text) <= length else "…" + text[-(length - 1):]
+
+    @staticmethod
+    def _relative_time(value):
+        if not value:
+            return "Nothing synced yet"
+        seconds = max(0, int((datetime.datetime.now() - value).total_seconds()))
+        if seconds < 60:
+            return "Synced just now"
+        if seconds < 3600:
+            return f"Synced {seconds // 60}m ago"
+        return f"Last sync {value.strftime('%H:%M')}"
+
+    @staticmethod
+    def _format_size(size):
+        if size is None:
+            return ""
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                return f"{value:.0f} {unit}" if unit in ("B", "KB") else f"{value:.1f} {unit}"
+            value /= 1024
+
+    @staticmethod
+    def _format_duration(duration):
+        if duration is None:
+            return ""
+        return f"{duration:.1f}s" if duration < 10 else f"{duration:.0f}s"
+
+    def _schedule_refresh(self):
+        try:
+            self._pulse += 1
+            self._refresh()
+            self.root.after(500, self._schedule_refresh)
+        except Exception:
+            pass
 
     def _toggle_pause(self):
         self.rclone.toggle_pause()
 
-    def _refresh(self):
-        # Update status
-        status = self.rclone.status
-        if self.rclone.is_paused:
-            status = "paused"
-            self._pause_btn.configure(text="Resume", fg_color="#f38ba8", hover_color="#f9e2af")
-        else:
-            self._pause_btn.configure(text="Pause", fg_color="#313244", hover_color="#45475a")
-
-        color  = {
-            "idle":     "#a6adc8",
-            "paused":   "#f38ba8",
-            "syncing":  "#89b4fa",
-            "error":    "#f38ba8",
-        }.get(status, "#a6adc8")
-        self._status_dot.configure(text_color=color)
-        self._status_label.configure(text=status)
-
-        # Handle Live Progress
-        if status == "syncing" and getattr(self.rclone, "live_progress", ""):
-            text = self.rclone.live_progress
-            self._progress_label.configure(text=text)
-            if not self._progress_frame.winfo_ismapped():
-                self._progress_frame.pack(fill="x", padx=14, pady=(2, 6), after=self.header_frame)
-        else:
-            if self._progress_frame.winfo_ismapped():
-                self._progress_frame.pack_forget()
-
-        # Rebuild feed efficiently by checking for actual cache state changes
-        entries = getattr(self.rclone, "recent_files", [])
-        current_history = repr(entries)
-
-        if not hasattr(self, "_last_history") or self._last_history != current_history:
-            self._last_history = current_history
-
-            if not entries:
-                self._feed_label.configure(text="No recently synced files yet.")
-            else:
-                lines = []
-                for e in entries:
-                    action_char = "[-]" if e["action"] == "Deleted" else "[+]"
-                    lines.append(f"{action_char} {e['time']} | {e['name']}")
-                self._feed_label.configure(text="\n".join(lines))
-
-    def _schedule_refresh(self):
-        try:
-            self._refresh()
-        except Exception as e:
-            logger.error(f"ActivityFeed refresh error: {e}")
-        paused = self.rclone.is_paused
-        syncing = self.rclone.status == "syncing" and not paused
-        delay = 500 if syncing else 3000
-        try:
-            self.root.after(delay, self._schedule_refresh)
-        except Exception:
-            pass  # window was destroyed, loop ends naturally
-
     def _sync_now(self):
-        self.rclone.full_bisync()
+        self.rclone.request_reconcile()
+
+    def _open_folder(self):
+        path = config.load_config().get("local_folder")
+        if path and os.path.isdir(path):
+            os.startfile(path)
 
     def _toggle_startup(self):
-        if self._startup_var.get():
-            startup.register()
-        else:
-            startup.unregister()
+        startup.register() if self._startup_var.get() else startup.unregister()
 
     def _open_settings(self):
         from ui.settings_gui import SettingsWindow
         SettingsWindow.open(self.parent, self.rclone)
 
     def _open_log(self):
-        import os
-        log_path = logger.LOG_FILE
-        if log_path.exists():
-            os.startfile(str(log_path))
+        if logger.LOG_FILE.exists():
+            os.startfile(str(logger.LOG_FILE))
