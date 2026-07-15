@@ -51,9 +51,11 @@ class ActivityFeed:
 
         self.root = ctk.CTkToplevel(parent_root)
         self.root.title("DriveBridge")
-        w, h = 440, 620
-        x = self.root.winfo_screenwidth() - w - 20
-        y = self.root.winfo_screenheight() - h - 60
+        w = 470
+        screen_h = self.root.winfo_screenheight()
+        h = min(700, screen_h - 30)
+        x = self.root.winfo_screenwidth() - w - 16
+        y = max(10, screen_h - h - 48)
         self.root.geometry(f"{w}x{h}+{x}+{y}")
         self.root.resizable(False, False)
         self.root.configure(fg_color=BG)
@@ -79,7 +81,7 @@ class ActivityFeed:
         header = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
         header.pack(fill="x", padx=18, pady=(16, 10))
         ctk.CTkLabel(header, text="DriveBridge",
-                     font=ctk.CTkFont("Segoe UI", 21, "bold"),
+                     font=ctk.CTkFont("Segoe UI", 23, "bold"),
                      text_color=TEXT).pack(side="left")
         ctk.CTkButton(header, text="×", width=30, height=30,
                       fg_color="transparent", hover_color="#313244",
@@ -94,7 +96,7 @@ class ActivityFeed:
                                         font=ctk.CTkFont("Segoe UI", 16, "bold"), text_color=TEXT)
         self._hero_title.grid(row=0, column=1, sticky="sw", pady=(12, 0))
         self._hero_subtitle = ctk.CTkLabel(hero, text="", anchor="w",
-                                           font=ctk.CTkFont("Segoe UI", 11), text_color=MUTED)
+                                           font=ctk.CTkFont("Segoe UI", 13), text_color=MUTED)
         self._hero_subtitle.grid(row=1, column=1, sticky="nw", pady=(0, 12))
         hero.columnconfigure(1, weight=1)
 
@@ -104,36 +106,36 @@ class ActivityFeed:
         quick = ctk.CTkFrame(lanes, fg_color=CARD_ALT, corner_radius=12)
         quick.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
         ctk.CTkLabel(quick, text="QUICK UPLOADS", text_color=MUTED,
-                     font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(anchor="w", padx=13, pady=(11, 2))
+                     font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(anchor="w", padx=13, pady=(12, 3))
         self._quick_value = ctk.CTkLabel(quick, text="Ready", text_color=GREEN,
-                                         font=ctk.CTkFont("Segoe UI", 14, "bold"), anchor="w")
+                                         font=ctk.CTkFont("Segoe UI", 16, "bold"), anchor="w")
         self._quick_value.pack(anchor="w", padx=13)
         self._quick_detail = ctk.CTkLabel(quick, text="Watching files", text_color=MUTED,
-                                          font=ctk.CTkFont("Segoe UI", 10), anchor="w")
-        self._quick_detail.pack(anchor="w", padx=13, pady=(1, 11))
+                                          font=ctk.CTkFont("Segoe UI", 12), anchor="w")
+        self._quick_detail.pack(anchor="w", padx=13, pady=(2, 12))
 
         full = ctk.CTkFrame(lanes, fg_color=CARD_ALT, corner_radius=12)
         full.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
         ctk.CTkLabel(full, text="BACKGROUND CHECK", text_color=MUTED,
-                     font=ctk.CTkFont("Segoe UI", 10, "bold")).pack(anchor="w", padx=13, pady=(11, 2))
+                     font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(anchor="w", padx=13, pady=(12, 3))
         self._full_value = ctk.CTkLabel(full, text="Idle", text_color=GREEN,
-                                        font=ctk.CTkFont("Segoe UI", 14, "bold"), anchor="w")
+                                        font=ctk.CTkFont("Segoe UI", 16, "bold"), anchor="w")
         self._full_value.pack(anchor="w", padx=13)
         self._full_detail = ctk.CTkLabel(full, text="Safety reconciliation", text_color=MUTED,
-                                         font=ctk.CTkFont("Segoe UI", 10), anchor="w")
-        self._full_detail.pack(anchor="w", padx=13, pady=(1, 11))
+                                         font=ctk.CTkFont("Segoe UI", 12), anchor="w")
+        self._full_detail.pack(anchor="w", padx=13, pady=(2, 12))
 
         section = ctk.CTkFrame(self.root, fg_color="transparent")
         section.pack(fill="x", padx=18, pady=(2, 5))
         ctk.CTkLabel(section, text="Recent files", text_color=TEXT,
-                     font=ctk.CTkFont("Segoe UI", 14, "bold")).pack(side="left")
+                     font=ctk.CTkFont("Segoe UI", 16, "bold")).pack(side="left")
         self._last_sync_label = ctk.CTkLabel(section, text="", text_color=MUTED,
-                                              font=ctk.CTkFont("Segoe UI", 10))
+                                              font=ctk.CTkFont("Segoe UI", 12))
         self._last_sync_label.pack(side="right")
 
         self._feed = ctk.CTkScrollableFrame(self.root, fg_color=CARD_ALT,
-                                             corner_radius=12, height=220)
-        self._feed.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+                                             corner_radius=12, height=265)
+        self._feed.pack(fill="both", expand=False, padx=16, pady=(0, 10))
 
         actions = ctk.CTkFrame(self.root, fg_color="transparent")
         actions.pack(fill="x", padx=16, pady=(0, 8))
@@ -202,7 +204,7 @@ class ActivityFeed:
         self._full_value.configure(text="Running" if full else "Idle",
                                    text_color=BLUE if full else GREEN)
         detail = self.rclone.live_progress if full and self.rclone.live_progress else "Safety reconciliation"
-        self._full_detail.configure(text=self._short(detail, 27))
+        self._full_detail.configure(text=self._short_front(detail, 29))
 
         entries = list(getattr(self.rclone, "recent_files", []))
         last = self.rclone.last_quick_synced or self.rclone.last_synced
@@ -225,30 +227,35 @@ class ActivityFeed:
                          text_color=MUTED, font=ctk.CTkFont(size=11)).pack(pady=38)
             return
         for entry in entries[:7]:
-            row = ctk.CTkFrame(self._feed, fg_color="transparent", height=42)
-            row.pack(fill="x", pady=2)
+            row = ctk.CTkFrame(self._feed, fg_color="transparent", height=54)
+            row.pack(fill="x", pady=3)
             row.pack_propagate(False)
             symbol = "✓" if entry["action"] != "Deleted" else "−"
             ctk.CTkLabel(row, text=symbol, width=24, text_color=GREEN if symbol == "✓" else RED,
-                         font=ctk.CTkFont(size=13, weight="bold")).pack(side="left")
+                         font=ctk.CTkFont(size=15, weight="bold")).pack(side="left")
             path = PurePosixPath(str(entry["name"]).replace("\\", "/"))
             text_box = ctk.CTkFrame(row, fg_color="transparent")
             text_box.pack(side="left", fill="both", expand=True)
             ctk.CTkLabel(text_box, text=self._short(path.name, 39), anchor="w",
-                         text_color=TEXT, font=ctk.CTkFont("Segoe UI", 11, "bold")).pack(fill="x")
+                         text_color=TEXT, font=ctk.CTkFont("Segoe UI", 13, "bold")).pack(fill="x")
             parent = "" if str(path.parent) == "." else str(path.parent)
             meta = " · ".join(x for x in (self._format_size(entry.get("size")),
                                              self._format_duration(entry.get("duration")),
                                              self._short(parent, 30)) if x)
             ctk.CTkLabel(text_box, text=meta or entry.get("action", "Synced"), anchor="w",
-                         text_color=MUTED, font=ctk.CTkFont("Segoe UI", 9)).pack(fill="x")
+                         text_color=MUTED, font=ctk.CTkFont("Segoe UI", 11)).pack(fill="x")
             ctk.CTkLabel(row, text=entry["time"], width=42, text_color=MUTED,
-                         font=ctk.CTkFont("Segoe UI", 10)).pack(side="right")
+                         font=ctk.CTkFont("Segoe UI", 11)).pack(side="right")
 
     @staticmethod
     def _short(text, length):
         text = str(text or "")
         return text if len(text) <= length else "…" + text[-(length - 1):]
+
+    @staticmethod
+    def _short_front(text, length):
+        text = str(text or "")
+        return text if len(text) <= length else text[:length - 1] + "…"
 
     @staticmethod
     def _relative_time(value):
