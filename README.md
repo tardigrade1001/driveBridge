@@ -13,7 +13,8 @@ DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dr
 - **Two-way bisync**: keeps a local folder and a Google Drive folder in sync, both ways
 - **Quick uploads**: new and modified local files upload individually within seconds instead of waiting for a full-folder scan
 - **Live watchdog**: detects file changes instantly, debounces repeated saves per file, and keeps batches of changed files queued separately
-- **Two-lane sync engine**: quick uploads stay responsive while slower full two-way reconciliation runs independently
+- **Two-lane sync engine**: separates quick uploads from slower full two-way reconciliation
+- **Reconciliation safeguards**: pauses quick-upload event handling during full scans so metadata updates cannot create upload loops
 - **Idle-aware startup**: gives new local files priority, then starts the boot-time reconciliation after 15 seconds without local activity
 - **Persistent activity dashboard**: shows quick uploads, background checks, queue state, recent files, sizes, durations, and last-sync time across restarts
 - **Optimized full scanning**: parallel checkers and checksum-skipping reduce reconciliation overhead
@@ -87,10 +88,10 @@ Configure in **Settings > Sync Behavior**:
 
 DriveBridge uses two independent sync paths:
 
-- Creating or modifying a local file schedules a direct `rclone copyto` after a four-second debounce. Repeated saves reset only that file's timer, and multiple files remain separate queue entries.
+- Creating or modifying a local file schedules a checksum-aware direct `rclone copyto` after a four-second debounce. Repeated saves reset only that file's timer, and multiple files remain separate queue entries.
 - Deletions, renames, remote changes, startup recovery, and periodic safety checks use the full `rclone bisync` reconciliation path.
 
-The quick-upload lane can run while a full reconciliation is scanning the folder, so a long background check does not make a newly created local file wait. At startup, DriveBridge begins watching immediately and waits for 15 seconds of local inactivity before starting its full recovery check.
+Quick uploads pause while a full reconciliation is scanning the folder. This prevents rclone's own metadata updates from being mistaken for new local edits; unchanged files are reported as skipped rather than as uploads. At startup, DriveBridge begins watching immediately and waits for 15 seconds of local inactivity before starting its full recovery check.
 
 Recent activity is saved locally in `drivebridge_activity.json`. The file contains filenames, timestamps, sizes, and transfer durations and is intentionally excluded from Git.
 

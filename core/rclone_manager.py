@@ -100,6 +100,11 @@ class RcloneManager:
         self._pending_lock     = threading.Lock()
         self._upload_lock      = threading.Lock()
         self._last_local_change = time.monotonic()
+        # A full bisync can touch local file metadata while reconciling the
+        # tree.  Do not turn those reconciliation events back into quick
+        # uploads.  Keep a short grace period because Windows can deliver the
+        # resulting filesystem notifications after rclone exits.
+        self._watch_suppressed_until = 0.0
         self.quick_upload_active = False
         self.quick_upload_file = ""
         self.last_quick_synced = None
@@ -310,6 +315,7 @@ class RcloneManager:
                         self._sync_lock.release()
                     except RuntimeError:
                         pass  # just in case
+                    self._watch_suppressed_until = time.monotonic() + 10
                     self._drain_pending_work()
 
         threading.Thread(target=worker, daemon=True).start()
@@ -340,6 +346,14 @@ class RcloneManager:
 
     def fast_upload(self, path):
         """Queue one changed local file without scanning the entire tree."""
+        # bisync is already reconciling this tree.  Its metadata updates can
+        # produce watchdog modified events; feeding those back into copyto is
+        # the duplicate-upload loop.  The reconciliation pass is the source
+        # of truth while it holds this lock, and the grace period catches late
+        # Windows notifications after it exits.
+        if self._sync_lock.locked() or time.monotonic() < self._watch_suppressed_until:
+            return
+
         self._last_local_change = time.monotonic()
         cfg = config.load_config()
         local_root = Path(cfg["local_folder"])
@@ -372,6 +386,10 @@ class RcloneManager:
             uploads = list(self._pending_uploads)
             self._pending_uploads.clear()
         if uploads:
+            if self._sync_lock.locked():
+                with self._pending_lock:
+                    self._pending_uploads.update(uploads)
+                return
             if not self._upload_lock.acquire(blocking=False):
                 with self._pending_lock:
                     self._pending_uploads.update(uploads)
@@ -389,7 +407,11 @@ class RcloneManager:
             local_root = Path(cfg["local_folder"])
             remote_root = f"{cfg['remote_name']}:{cfg['drive_folder']}"
             cflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
-            for raw_path in paths:
+            for index, raw_path in enumerate(paths):
+                if self._sync_lock.locked():
+                    with self._pending_lock:
+                        self._pending_uploads.update(paths[index:])
+                    break
                 source = Path(raw_path)
                 if self.is_paused or not source.is_file():
                     continue
@@ -397,19 +419,23 @@ class RcloneManager:
                 self.quick_upload_file = relative
                 size = source.stat().st_size
                 started = time.monotonic()
-                logger.info(f"Quick uploading {relative}")
+                logger.info(f"Quick checking {relative}")
                 result = subprocess.run(
                     [cfg["rclone_path"], "copyto", str(source),
                      f"{remote_root}/{relative}", "--modify-window", "1s",
-                     "--no-traverse"],
+                     "--no-traverse", "--checksum", "-vv"],
                     capture_output=True, text=True, creationflags=cflags)
+                rclone_output = f"{result.stdout}\n{result.stderr}".lower()
                 if result.returncode == 0:
-                    logger.success(f"Quick synced {relative}")
-                    self.last_quick_synced = datetime.datetime.now()
-                    self._record_recent(relative, "Synced", size=size,
-                                        duration=time.monotonic() - started)
+                    if "unchanged skipping" in rclone_output:
+                        logger.info(f"Quick skipped unchanged {relative}")
+                    else:
+                        logger.success(f"Quick synced {relative}")
+                        self.last_quick_synced = datetime.datetime.now()
+                        self._record_recent(relative, "Synced", size=size,
+                                            duration=time.monotonic() - started)
                 else:
-                    detail = result.stderr.strip()
+                    detail = (result.stderr or result.stdout).strip()
                     self.last_error = f"Quick upload failed for {relative}: {detail}"
                     logger.error(self.last_error)
                     self._pending_sync = True
