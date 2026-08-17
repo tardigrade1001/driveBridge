@@ -14,9 +14,9 @@ DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dr
 - **Quick uploads**: new and modified local files upload individually within seconds instead of waiting for a full-folder scan
 - **Live watchdog**: detects file changes instantly, debounces repeated saves per file, and keeps batches of changed files queued separately
 - **Two-lane sync engine**: separates quick uploads from slower full two-way reconciliation
-- **Reconciliation safeguards**: pauses quick-upload event handling during full scans so metadata updates cannot create upload loops
+- **Reconciliation safeguards**: absorbs queued quick checks during full scans so metadata updates cannot create upload loops or inflated queue counts
 - **Idle-aware startup**: gives new local files priority, then starts the boot-time reconciliation after 15 seconds without local activity
-- **Persistent activity dashboard**: shows quick uploads, background checks, queue state, recent files, sizes, durations, and last-sync time across restarts
+- **Persistent activity dashboard**: shows quick uploads, background checks, queue state, recent files, sizes, durations, and last-sync time across restarts; closes automatically when you click elsewhere
 - **Optimized full scanning**: parallel checkers and checksum-skipping reduce reconciliation overhead
 - **Automatic Conflict Resolution**: uses "newer wins" logic to resolve simultaneous edits instantly, preventing "conflict file" clutter while preserving your latest save
 - **Cross-Platform Stability**: handles Google Drive's 1-second timestamp rounding to prevent "false" change detections and unnecessary syncs

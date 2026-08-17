@@ -99,6 +99,8 @@ class RcloneManager:
         self._pending_uploads  = set()
         self._pending_lock     = threading.Lock()
         self._upload_lock      = threading.Lock()
+        self._reconcile_active = False
+        self._reconcile_covered_uploads = set()
         self._last_local_change = time.monotonic()
         # A full bisync can touch local file metadata while reconciling the
         # tree.  Do not turn those reconciliation events back into quick
@@ -136,6 +138,14 @@ class RcloneManager:
                 on_complete(False, "Sync already in progress")
             return
 
+        self._reconcile_active = True
+        with self._pending_lock:
+            absorbed = len(self._pending_uploads)
+            self._reconcile_covered_uploads.update(self._pending_uploads)
+            self._pending_uploads.clear()
+        if absorbed:
+            logger.info(f"Background check absorbed {absorbed} queued quick checks.")
+
         marker      = local_path / ".bisync_initialized"
         resync_flag = [] if marker.exists() else ["--resync"]
 
@@ -167,6 +177,7 @@ class RcloneManager:
 
         def worker():
             owns_lock = True
+            sync_succeeded = False
             try:
                 # Nuke orphaned lock files so sudden app shutdowns never stall future syncs.
                 try:
@@ -247,6 +258,7 @@ class RcloneManager:
                         result_returncode = force_result.returncode  # use the force-run's actual exit code
 
                 if result_returncode in (0, 9):
+                    sync_succeeded = True
                     marker.touch()
                     self.last_synced  = datetime.datetime.now()
                     self._retry_count = 0
@@ -316,6 +328,13 @@ class RcloneManager:
                     except RuntimeError:
                         pass  # just in case
                     self._watch_suppressed_until = time.monotonic() + 10
+                    with self._pending_lock:
+                        if sync_succeeded:
+                            self._reconcile_covered_uploads.clear()
+                        else:
+                            self._pending_uploads.update(self._reconcile_covered_uploads)
+                            self._reconcile_covered_uploads.clear()
+                        self._reconcile_active = False
                     self._drain_pending_work()
 
         threading.Thread(target=worker, daemon=True).start()
@@ -336,9 +355,14 @@ class RcloneManager:
         remote = f"{cfg['remote_name']}:{cfg['drive_folder']}"
         self._run_bisync(local, remote, on_complete=on_complete)
 
-    def request_reconcile(self):
+    def request_reconcile(self, from_watchdog=False):
         """Run one full sync, preserving the request if other work is active."""
-        if self._sync_lock.locked():
+        if from_watchdog and (
+                self._reconcile_active
+                or self._sync_lock.locked()
+                or time.monotonic() < self._watch_suppressed_until):
+            return
+        if self._reconcile_active or self._sync_lock.locked():
             self._pending_sync = True
             logger.info("Full reconciliation queued after active sync.")
         else:
@@ -351,7 +375,9 @@ class RcloneManager:
         # the duplicate-upload loop.  The reconciliation pass is the source
         # of truth while it holds this lock, and the grace period catches late
         # Windows notifications after it exits.
-        if self._sync_lock.locked() or time.monotonic() < self._watch_suppressed_until:
+        if (self._reconcile_active
+                or self._sync_lock.locked()
+                or time.monotonic() < self._watch_suppressed_until):
             return
 
         self._last_local_change = time.monotonic()
@@ -386,9 +412,11 @@ class RcloneManager:
             uploads = list(self._pending_uploads)
             self._pending_uploads.clear()
         if uploads:
-            if self._sync_lock.locked():
-                with self._pending_lock:
-                    self._pending_uploads.update(uploads)
+            with self._pending_lock:
+                reconcile_now = self._reconcile_active or self._sync_lock.locked()
+                if reconcile_now:
+                    self._reconcile_covered_uploads.update(uploads)
+            if reconcile_now:
                 return
             if not self._upload_lock.acquire(blocking=False):
                 with self._pending_lock:
@@ -396,7 +424,9 @@ class RcloneManager:
                 return
             threading.Thread(target=self._run_fast_uploads,
                              args=(uploads,), daemon=True).start()
-        elif self._pending_sync and not self._sync_lock.locked():
+        elif (self._pending_sync
+                and not self._reconcile_active
+                and not self._sync_lock.locked()):
             self._pending_sync = False
             self.full_bisync()
 
@@ -408,9 +438,12 @@ class RcloneManager:
             remote_root = f"{cfg['remote_name']}:{cfg['drive_folder']}"
             cflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
             for index, raw_path in enumerate(paths):
-                if self._sync_lock.locked():
+                if self._reconcile_active or self._sync_lock.locked():
                     with self._pending_lock:
-                        self._pending_uploads.update(paths[index:])
+                        if self._reconcile_active or self._sync_lock.locked():
+                            self._reconcile_covered_uploads.update(paths[index:])
+                        else:
+                            self._pending_uploads.update(paths[index:])
                     break
                 source = Path(raw_path)
                 if self.is_paused or not source.is_file():
@@ -499,7 +532,7 @@ class RcloneManager:
             return False
 
         handler = _SyncHandler(upload_fn=self.fast_upload,
-                               reconcile_fn=self.request_reconcile,
+                               reconcile_fn=lambda: self.request_reconcile(from_watchdog=True),
                                debounce_seconds=4)
         observer = Observer()
         observer.schedule(handler, str(local), recursive=True)

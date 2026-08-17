@@ -48,6 +48,8 @@ class ActivityFeed:
         self.rclone = rclone_manager
         self._last_history = None
         self._pulse = 0
+        self._closing = False
+        self._click_away_enabled = False
 
         self.root = ctk.CTkToplevel(parent_root)
         self.root.title("DriveBridge")
@@ -68,14 +70,40 @@ class ActivityFeed:
         self._build()
         self._refresh()
         self._schedule_refresh()
+        self.root.after(250, self._enable_click_away)
 
     def _close(self):
+        if self._closing:
+            return
+        self._closing = True
         ActivityFeed._is_open = False
         ActivityFeed._instance = None
         try:
             self.root.destroy()
         except Exception:
             pass
+
+    def _enable_click_away(self):
+        """Make the tray dashboard behave like a popup after it is visible."""
+        try:
+            self._click_away_enabled = True
+            self.root.bind("<FocusOut>", self._on_focus_out, add="+")
+            self.root.lift()
+            self.root.focus_force()
+        except Exception:
+            pass
+
+    def _on_focus_out(self, _event=None):
+        if self._click_away_enabled and not self._closing:
+            self.root.after(100, self._close_if_focus_left)
+
+    def _close_if_focus_left(self):
+        try:
+            focused = self.root.focus_get()
+            if focused is None or focused.winfo_toplevel() != self.root:
+                self._close()
+        except Exception:
+            self._close()
 
     def _build(self):
         header = ctk.CTkFrame(self.root, fg_color=BG, corner_radius=0)
@@ -309,6 +337,7 @@ class ActivityFeed:
     def _open_settings(self):
         from ui.settings_gui import SettingsWindow
         SettingsWindow.open(self.parent, self.rclone)
+        self._close()
 
     def _open_log(self):
         if logger.LOG_FILE.exists():
