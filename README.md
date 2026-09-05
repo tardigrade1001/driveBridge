@@ -1,6 +1,6 @@
 # ☁️ DriveBridge
 
-**A lightweight Google Drive sync client for Windows. Lives in your system tray, stays out of your way.**
+**A lightweight Google Drive sync client for Windows. Lives in the system tray and runs quietly.**
 
 DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dropbox-style tray app. Two-way sync, live file watching, conflict resolution and mass-deletion protection, in a light client.
 
@@ -19,7 +19,7 @@ DriveBridge wraps [`rclone bisync`](https://rclone.org/bisync/) in a polished Dr
 - **Persistent activity dashboard**: shows quick uploads, background checks, queue state, recent files, sizes, durations and last-sync time across restarts, and closes automatically when you click elsewhere
 - **Optimized full scanning**: parallel checkers and checksum-skipping reduce reconciliation overhead
 - **Automatic Conflict Resolution**: simultaneous edits resolve by "newer wins", so the file with the later modification time is kept and the other copy is replaced. One version survives, and the sync stays free of "conflict file" clutter. Keep both edits by renaming one before syncing.
-- **Timestamp handling**: absorbs Google Drive's 1-second timestamp rounding, so a file that only appears to have changed is left alone and the sync stays quiet
+- **Timestamp handling**: absorbs the 1-second timestamp rounding in Google Drive, so a file that only appears to have changed is left alone and the sync stays quiet
 - **Mass deletion protection**: if a sync would delete a large number of files on Drive, it pauses and asks for confirmation before touching anything
 - **Boot-sweep recovery**: runs a full reconciliation on every launch to catch changes made during downtime
 - **Smart exclusions**: ignores Windows and Office lock files (`~$*`, `Thumbs.db`, `.tmp`, `desktop.ini`) that would otherwise cause endless sync loops
@@ -58,7 +58,7 @@ Download from [rclone.org/downloads](https://rclone.org/downloads/) and install 
 Launch DriveBridge.bat
 ```
 
-On first launch, the setup wizard will walk you through authenticating with Google Drive and choosing your sync folder. It writes the rclone configuration for you.
+On first launch, the setup wizard walks through authenticating with Google Drive and choosing a sync folder. It writes the rclone configuration for you.
 
 ---
 
@@ -88,10 +88,10 @@ Configure in **Settings > Sync Behavior**:
 
 DriveBridge uses two independent sync paths:
 
-- Creating or modifying a local file schedules a checksum-aware direct `rclone copyto` after a four-second debounce. Repeated saves reset only that file's timer, and multiple files remain separate queue entries.
+- Creating or modifying a local file schedules a checksum-aware direct `rclone copyto` after a four-second debounce. Repeated saves reset the timer for that file alone, and multiple files remain separate queue entries.
 - Deletions, renames, remote changes, startup recovery, and periodic safety checks use the full `rclone bisync` reconciliation path.
 
-Quick uploads pause for the duration of a full reconciliation scan. This keeps rclone's own metadata updates clear of the new-local-edit path, and unchanged files are reported as skipped. At startup, DriveBridge begins watching immediately and waits for 15 seconds of local inactivity before starting its full recovery check.
+Quick uploads pause for the duration of a full reconciliation scan. This keeps the rclone metadata updates clear of the new-local-edit path, and unchanged files are reported as skipped. At startup, DriveBridge begins watching immediately and waits for 15 seconds of local quiet before starting the full recovery check.
 
 Recent activity is saved locally in `drivebridge_activity.json`. The file contains filenames, timestamps, sizes, and transfer durations and is intentionally excluded from Git.
 
@@ -138,11 +138,11 @@ The wizard detects a missing rclone or an unconfigured Google Drive remote, and 
 
 ## The Story Behind This
 
-The idea started with a frustration with the official Google Drive desktop client. Marking files for offline access stores two copies: one on your main drive, one in Google's cache on C:. Delete the C: copy and it redownloads. Keep files online-only and they stay out of reach from the main PC. Reliable sync across machines needed a third option.
+The idea started with a frustration with the official Google Drive desktop client. Marking files for offline access stores two copies: one on the main drive, one in the Google cache on C:. Delete the C: copy and it redownloads. Keep files online-only and they stay out of reach from the main PC. Reliable sync across machines needed a third option.
 
 The original plan was to build around a clear hierarchy: the PC as the main base holding everything, the laptop as a satellite that pulls files from the cloud on request. The cloud would serve as a backup layer, with the PC as the source of truth.
 
-The laptop side proved to be genuinely complex to implement. It required rclone mounting via WinFsp, pinned folders for selective offline access, and cache management. Partway through, it became clear that the official Google Drive client's online-only mode already covers that use case well enough. The laptop implementation was dropped, the PC sync side was completed and tested, and that is what DriveBridge is today.
+The laptop side proved to be genuinely complex to implement. It required rclone mounting via WinFsp, pinned folders for selective offline access, and cache management. Partway through, it became clear that the online-only mode in the official Google Drive client already covers that use case well enough. The laptop implementation was dropped, the PC sync side was completed and tested, and that is what DriveBridge is today.
 
 ---
 
